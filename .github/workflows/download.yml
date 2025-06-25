@@ -1,0 +1,87 @@
+# .github/workflows/download.yml
+name: Daily EPG Download
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Download binary
+        run: |
+          curl -L http://epg.it999.ru/edem.xml.gz -o edem.xml.gz
+
+      - name: Unzip XML
+        run: |
+          gunzip -f edem.xml.gz
+
+      - name: Parse XML and download missing icons
+        run: |
+          python3 <<EOF
+          import os
+          import xml.etree.ElementTree as ET
+          import urllib.request
+          import gzip
+
+          # Constants
+          IMG_DIR = "img"
+          XML_FILE = "edem.xml"
+          BASE_URL = "https://raw.githubusercontent.com/AlexMegel/EPG-EdemTV/master/img/"
+
+          # Load and parse the XML file
+          tree = ET.parse(XML_FILE)
+          root = tree.getroot()
+
+          # Loop through all <icon> elements under <channel>
+          for icon in root.findall(".//channel/icon"):
+              url = icon.attrib.get("src")
+              if not url:
+                  continue
+              filename = os.path.basename(url)
+              local_path = os.path.join(IMG_DIR, filename)
+              if not os.path.exists(local_path):
+                  print(f"Downloading {url}...")
+                  try:
+                      urllib.request.urlretrieve(url, local_path)
+                  except Exception as e:
+                      print(f"Failed to download {url}: {e}")
+              else:
+                  print(f"Already exists: {local_path}")
+
+              # Update src attribute
+              icon.set("src", BASE_URL + filename)
+
+          # Write updated XML to file
+          tree.write(XML_FILE, encoding="utf-8", xml_declaration=True)
+
+          # Compress it back to .xml.gz
+          with open(XML_FILE, "rb") as f_in:
+              with gzip.open("edem.xml.gz", "wb") as f_out:
+                  f_out.writelines(f_in)
+          EOF
+
+      - name: Commit new files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ./edem.xml.gz
+          git add img/
+          git commit -m "Daily EPG update"
+          git push
+
+      - name: Monthly clean-up (squash history)
+        if: startsWith(github.event.schedule, '0 2 1') # 1st day of the month
+        run: |
+          git checkout --orphan temp-clean
+          git add ./edem.xml.gz
+          git add img/
+          git commit -m "Clean history - keep latest binary"
+          git branch -D main
+          git branch -m main
+          git push -f origin main

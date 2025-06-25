@@ -1,0 +1,36 @@
+name: History Cleanup
+
+on:
+  workflow_dispatch:
+
+jobs:
+  squash-history:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout full repo history
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Find latest commit from last 14 days
+        id: find_commit
+        run: |
+          # Find the latest commit within the last 30 days
+          COMMIT=$(git rev-list -n 1 --before="$(date -d '14 days ago' --iso-8601=seconds)" HEAD)
+          echo "Found base commit: $COMMIT"
+          echo "commit_sha=$COMMIT" >> $GITHUB_OUTPUT
+
+      - name: Squash history and keep only recent
+        run: |
+          git checkout --orphan temp_branch
+          git reset --soft ${{ steps.find_commit.outputs.commit_sha }}
+          git commit -m "Squashed history, kept last 30 days of work"
+          git push origin temp_branch --force
+          git branch -M master
+          git push origin master --force
